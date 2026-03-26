@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
+import re
 
 ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(ROOT))
@@ -57,6 +58,26 @@ def safe_str(val) -> str:
     return str(val).strip()
 
 
+def _to_number(val, *, is_int: bool):
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        return int(val) if is_int else float(val)
+    if isinstance(val, str):
+        s = val.strip().lower()
+        if not s:
+            return None
+        m = re.search(r"-?\d+(?:[.,]\d+)?", s)
+        if not m:
+            return None
+        try:
+            num = float(m.group(0).replace(",", "."))
+        except ValueError:
+            return None
+        return int(num) if is_int else num
+    return None
+
+
 # ─── PostgreSQL: programs ──────────────────────────────────────────────────────
 
 def ingest_programs():
@@ -67,6 +88,7 @@ def ingest_programs():
     print(f"  Найдено строк: {len(rows)}")
 
     program_fields = [c.key for c in Program.__table__.columns if c.key != "id"]
+    columns = {c.key: c for c in Program.__table__.columns}
 
     with SessionLocal() as db:
         db.execute(text("TRUNCATE TABLE programs RESTART IDENTITY"))
@@ -75,7 +97,17 @@ def ingest_programs():
         objects = []
         for row in rows:
             row_dict = {headers[i]: row[i] for i in range(min(len(headers), len(row)))}
-            obj = Program(**{f: row_dict.get(f) for f in program_fields})
+            cleaned = {}
+            for f in program_fields:
+                val = row_dict.get(f)
+                col = columns.get(f)
+                if col is not None and col.type is not None:
+                    if col.type.__class__.__name__ == "Integer":
+                        val = _to_number(val, is_int=True)
+                    elif col.type.__class__.__name__ == "Float":
+                        val = _to_number(val, is_int=False)
+                cleaned[f] = val
+            obj = Program(**cleaned)
             objects.append(obj)
 
         db.add_all(objects)
