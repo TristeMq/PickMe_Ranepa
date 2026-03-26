@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import logging
+import time
+
+logger = logging.getLogger(__name__)
+
 from app.services import faq_service, llm_service, router, sql_service
 from app.services.preprocess import contains_profanity
 
@@ -26,8 +31,10 @@ NO_ANSWER_RESPONSE = (
 # ─── Пайплайн ─────────────────────────────────────────────────────────────────
 
 def build_rag_answer(question: str) -> str:
+    t0 = time.perf_counter()
     chunks = faq_service.search_all(question)
     if not chunks:
+        logger.info("rag.no_chunks elapsed_ms=%.1f", (time.perf_counter() - t0) * 1000)
         return NO_ANSWER_RESPONSE
 
     context_parts = []
@@ -49,27 +56,44 @@ def build_rag_answer(question: str) -> str:
             ),
         },
     ]
-    return llm_service.chat(messages)
+    answer = llm_service.chat(messages)
+    logger.info("rag.ok elapsed_ms=%.1f chunks=%d", (time.perf_counter() - t0) * 1000, len(chunks))
+    return answer
 
 
 def build_chitchat_answer(question: str) -> str:
+    t0 = time.perf_counter()
     messages = [
         {"role": "system", "content": CHITCHAT_PROMPT},
         {"role": "user", "content": question},
     ]
-    return llm_service.chat(messages)
+    answer = llm_service.chat(messages)
+    logger.info("chitchat.ok elapsed_ms=%.1f", (time.perf_counter() - t0) * 1000)
+    return answer
 
 
 def get_answer(question: str) -> str:
     """Основной пайплайн: цензура → роутер → обработчик → ответ."""
+    t0 = time.perf_counter()
+    logger.info("Got question: %s", question)
     if contains_profanity(question):
+        logger.info("pipeline.profanity elapsed_ms=%.1f", (time.perf_counter() - t0) * 1000)
         return PROFANITY_RESPONSE
 
+    t_intent = time.perf_counter()
     intent = router.classify(question)
+    logger.info(
+        "pipeline.intent intent=%s elapsed_ms=%.1f",
+        intent,
+        (time.perf_counter() - t_intent) * 1000,
+    )
 
     if intent == "chitchat":
-        return build_chitchat_answer(question)
+        answer = build_chitchat_answer(question)
     elif intent == "sql":
-        return sql_service.query_programs(question)
+        answer = sql_service.query_programs(question)
     else:
-        return build_rag_answer(question)
+        answer = build_rag_answer(question)
+
+    logger.info("pipeline.total elapsed_ms=%.1f", (time.perf_counter() - t0) * 1000)
+    return answer

@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import logging
+import time
+
 from sqlalchemy import text
 
 from app.db.session import SessionLocal
 from app.services import llm_service
+
+logger = logging.getLogger(__name__)
 
 # Описание полей для промпта (LLM не пишет SQL — только выбирает значение фильтра)
 PROGRAMS_COLUMNS = {
@@ -45,6 +50,7 @@ _FILTER_QUERY = "SELECT * FROM programs WHERE {col} ILIKE :val"
 
 
 def _extract_filter(question: str) -> tuple[str | None, str | None]:
+    t0 = time.perf_counter()
     messages = [
         {"role": "system", "content": FILTER_SYSTEM_PROMPT},
         {"role": "user", "content": question},
@@ -56,6 +62,11 @@ def _extract_filter(question: str) -> tuple[str | None, str | None]:
     if col and col not in PROGRAMS_COLUMNS:
         col = None
         val = None
+    logger.info(
+        "sql.filter extracted=%s elapsed_ms=%.1f",
+        bool(col and val),
+        (time.perf_counter() - t0) * 1000,
+    )
     return col, val
 
 
@@ -77,14 +88,18 @@ def query_programs(question: str) -> str:
     Выполняет параметризованный SQL-запрос к таблице programs на основе вопроса.
     Возвращает текстовый ответ, сформированный LLM.
     """
+    t0 = time.perf_counter()
     col, val = _extract_filter(question)
 
     with SessionLocal() as db:
         if col and val:
             stmt = text(_FILTER_QUERY.format(col=col))
+            t_db = time.perf_counter()
             rows = db.execute(stmt, {"val": f"%{val}%"}).mappings().all()
         else:
+            t_db = time.perf_counter()
             rows = db.execute(text(_BASE_QUERY)).mappings().all()
+        logger.info("sql.query elapsed_ms=%.1f rows=%d", (time.perf_counter() - t_db) * 1000, len(rows))
 
     rows_text = _rows_to_text([dict(r) for r in rows])
 
@@ -96,6 +111,8 @@ def query_programs(question: str) -> str:
         "Отвечай кратко, точно и по существу на основе данных из таблицы."
     )
     user_msg = f"Вопрос: {question}\n\nДанные из базы:\n{rows_text}"
-    return llm_service.chat(
+    answer = llm_service.chat(
         [{"role": "system", "content": system}, {"role": "user", "content": user_msg}]
     )
+    logger.info("sql.answer elapsed_ms=%.1f", (time.perf_counter() - t0) * 1000)
+    return answer

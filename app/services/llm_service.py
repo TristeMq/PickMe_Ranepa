@@ -1,22 +1,22 @@
 from __future__ import annotations
 
 import json
+import logging
+import time
 from typing import Any
 
-from openai import OpenAI
+from groq import Groq
 
 import app.config as cfg
 
-_client: OpenAI | None = None
+logger = logging.getLogger(__name__)
+_client: Groq | None = None
 
 
-def _get_client() -> OpenAI:
+def _get_client() -> Groq:
     global _client
     if _client is None:
-        _client = OpenAI(
-            api_key=cfg.XAI_API_KEY,
-            base_url="https://api.x.ai/v1",
-        )
+        _client = Groq(api_key=cfg.GROQ_API_KEY)
     return _client
 
 
@@ -26,16 +26,20 @@ def chat(
     temperature: float = 0.3,
     response_format: dict | None = None,
 ) -> str:
+    t0 = time.perf_counter()
     kwargs: dict[str, Any] = {
-        "model": model or cfg.LLM_MODEL,
+        "model": model or cfg.GROQ_MODEL,
         "messages": messages,
         "temperature": temperature,
     }
     if response_format:
         kwargs["response_format"] = response_format
 
+    logger.info("llm.chat_start model=%s", kwargs["model"])
     resp = _get_client().chat.completions.create(**kwargs)
-    return resp.choices[0].message.content or ""
+    content = resp.choices[0].message.content or ""
+    logger.info("llm.chat_ok model=%s elapsed_ms=%.1f", kwargs["model"], (time.perf_counter() - t0) * 1000)
+    return content
 
 
 def chat_json(messages: list[dict[str, str]], model: str | None = None) -> dict:

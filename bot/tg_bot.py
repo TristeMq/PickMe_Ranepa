@@ -55,7 +55,7 @@ async def text_handler(message: Message):
     stop_event = asyncio.Event()
     typing_task = asyncio.create_task(_keep_typing(message.bot, message.chat.id, stop_event))
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=160.0) as client:
             resp = await client.post(
                 f"{API_URL}/ask",
                 json={"text": message.text, "user_id": message.from_user.id},
@@ -64,10 +64,10 @@ async def text_handler(message: Message):
             data = resp.json()
         await message.answer(data["answer"])
     except httpx.HTTPStatusError as e:
-        logger.error("HTTP error from API: %s", e)
+        logger.error("HTTP error from API: %r", e)
         await message.answer(ERROR_MESSAGE)
     except Exception as e:
-        logger.error("Unexpected error: %s", e)
+        logger.error("Unexpected error: %r", e)
         await message.answer(ERROR_MESSAGE)
     finally:
         stop_event.set()
